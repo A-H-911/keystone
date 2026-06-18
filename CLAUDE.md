@@ -4,106 +4,106 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-Keystone is **not an application** — it is a reusable, vendor/stack-neutral agent **skill** (plus a thin
-`/keystone` slash command) that turns a project description into an execution-ready planning & handoff
-package for *another* agent to implement. The "product" is mostly Markdown: a methodology spec, blank
-artifact templates, JSON schemas, and two small stdlib-only Python tools. There is no build for the skill
-itself; the only executable code is the repo bootstrapper and the package validator.
+Keystone is **not an application** — it is a reusable, vendor/stack-neutral agent **skill**, packaged as a
+**Claude Code plugin**, that turns a project description into an execution-ready planning & handoff package
+for *another* agent to implement. The "product" is mostly Markdown (a methodology spec, blank artifact
+templates, JSON schemas) plus two small stdlib-only Python tools. There is no build step; the only executable
+code is the repo bootstrapper and the package validator.
 
-This repo is the home of the *capability*, not of any project Keystone happens to plan. Generated output
-only ever lives under `examples/` and `generated-samples/` (curated) — never elsewhere in the tree.
+This repo is the home of the *capability*, not of any project Keystone plans. Generated output only ever
+lives under `examples/` and `generated-samples/` (curated) — never elsewhere.
 
-This directory is **not currently a git repository** (`scripts/init_skill_repo.py` is the tool that turns a
-directory like this into one).
+## Layout (post-restructure)
+
+The repository is its own **plugin marketplace**, and the skill is one **self-contained bundle**:
+
+```
+.claude-plugin/marketplace.json      # repo = marketplace (one plugin: keystone)
+plugins/keystone/                     # THE installable bundle — self-contained, copied intact on install
+├── .claude-plugin/plugin.json
+├── SKILL.md                          # always-loaded front door (owns the capability)
+├── references/                       # on-demand depth, incl. artifact-catalog.md (the artifact catalog)
+├── templates/                        # blank artifact forms (single source of truth for document shape)
+├── schemas/                          # JSON schemas (single source of truth for data shape)
+├── scripts/                          # init_skill_repo.py (repo bootstrap) + validate_package.py (gates)
+└── assets/                           # logos (used by repo-init branding)
+docs/                                 # architecture, methodology, workflow, design-decisions, install
+examples/  generated-samples/  tests/ # teaching material, demo package, validator self-test
+```
+
+There is **no** top-level `skill/`, `templates/`, `schemas/`, `scripts/`, `commands/`, or `adrs/` anymore —
+everything runtime moved into `plugins/keystone/`; build-history docs were removed.
 
 ## Commands
 
-Python 3.9+ is the only hard dependency. No pytest, no third-party packages — everything is stdlib.
+Python 3.9+ is the only hard dependency (stdlib only — no pytest, no third-party packages).
 
 ```bash
-# Validate a generated package against the 5 mechanical quality gates (human-readable)
-python tests/validate_package.py <package-dir>
-python tests/validate_package.py <package-dir> --json     # machine-readable, for CI/wrappers
-
-# Run the validator's self-test (asserts both fixtures behave; this is the test suite)
+# Validator self-test (this is the test suite)
 python tests/test_validate_package.py
 
-# Bootstrap a skill-hosting repo. ALWAYS --dry-run first (writes nothing), then re-run to apply.
-python scripts/init_skill_repo.py --repo-name <name> --owner <org> --dry-run
-python scripts/init_skill_repo.py --repo-name <name> --owner <org>                 # local git init + commit
-python scripts/init_skill_repo.py --repo-name <name> --owner <org> --create-remote # opt-in GitHub push (needs gh)
+# Validate a generated package against the 5 mechanical quality gates
+python plugins/keystone/scripts/validate_package.py <package-dir>          # human report
+python plugins/keystone/scripts/validate_package.py <package-dir> --json   # machine-readable
+
+# Preview a repo bootstrap (writes nothing); drop --dry-run to apply
+python plugins/keystone/scripts/init_skill_repo.py --repo-name <name> --owner <org> --dry-run
 ```
 
-There is no single test runner against fixtures other than `test_validate_package.py`; run that file directly.
-`validate_package.py` exits `0` (all critical gates pass), `1` (a critical gate failed → NOT READY), or
-`2` (usage/IO error). The init script uses exit codes `2`/`3`/`4`/`130` (see `scripts/README.md`).
+`validate_package.py` exits `0` (all critical gates pass), `1` (a critical gate failed → NOT READY), `2`
+(usage/IO error). The init script uses exit codes `2`/`3`/`4`/`130` (see its `scripts/README.md`).
 
-## Architecture — the one principle that governs everything
+> Windows note: `init_skill_repo.py` prints Unicode glyphs (`→`, `•`, box-drawing) in its banner/summary; on
+> a `cp1252` console it can raise `UnicodeEncodeError`. Run with `PYTHONIOENCODING=utf-8` (a pre-existing
+> rough edge, not specific to a given change).
+
+## Architecture — the governing principle
 
 > **The skill owns the capability; every entry point is a thin wrapper.**
 
-`/keystone` (and any future CLI/API/MCP/UI) only: gathers input, validates *invocation syntax* (flag values),
-normalizes to the input contract + a mode, invokes the skill, and routes output. It contains **no
-methodology and makes no planning decisions**. All 22 workflow stages, artifact selection, quality gates, and
-handoff logic live in the `keystone` skill. This is enforced by gate **G-CMD-THIN**. If you feel the urge to
-add logic to `commands/keystone.md`, it belongs in the skill instead.
+All methodology — the 22 stages, artifact selection, quality gates, handoff logic — lives in
+`plugins/keystone/SKILL.md` + its `references/`. External entry points (CLI/API/MCP/UI) only normalize input,
+invoke the skill, and route output, carrying no methodology (gate **G-CMD-THIN**). In Claude Code the skill
+*is* the entry point (invoked as `/keystone:keystone` when installed as a plugin, or `/keystone` when copied
+standalone into a skills dir) — there is no separate command file.
 
-The dependency arrow points one way: **entry points → skill → shared assets (`templates/`, `schemas/`)**.
-Nothing depends on a particular entry point; adding a wrapper leaves the skill untouched.
+The 22 stages: **Understand** (1–8 intake→scope) → **Explore** (9–15 research→decisions→risk) → **Plan &
+hand off** (16–22 execution plan→artifacts→repo init→validation→handoff). Authoritative per-stage spec:
+`plugins/keystone/references/workflow.md`.
 
-### Where things live (and the single-source-of-truth rules)
+## Invariants that must stay true
 
-- **`skill/SKILL.md`** — always-loaded front door: principles, modes, the 22-stage map, reference index.
-- **`skill/references/*.md`** — progressive-disclosure depth, loaded only when work reaches the matching
-  part. `workflow.md` is the authoritative per-stage spec; `governance.md` owns identifiers/statuses/
-  versioning; `quality-gates.md` defines all gates; `extension.md` is the enforceable entry-point contract;
-  `safeguards.md` lists the anti-patterns being prevented.
-- **`templates/`** — blank artifact forms. **Single source of truth for document shape.**
-- **`schemas/`** — JSON schemas (input, state, handoff, registers). **Single source of truth for data shape.**
-  When the skill is packaged to run standalone, `templates/` and `schemas/` are *vendored* (copied) into the
-  bundle by a build step — so **edit them once at the repo root; never create a second copy** during dev.
-- **`scripts/init_skill_repo.py`** is the single source of truth for repo bootstrap; `.sh`/`.ps1` siblings
-  are thin interpreter-locating wrappers with **no logic** — keep it that way.
-- **`commands/keystone.md`** — the thin wrapper (see above).
-- Repo-root `*.md` (`METHODOLOGY`, `WORKFLOW`, `ARTIFACT-CATALOG`, `ARCHITECTURE`, `ROADMAP`, etc.) are
-  human-facing spec/rationale and are *not* vendored into the runtime bundle.
+- **Self-contained bundle (mechanically required).** Claude Code copies only the plugin directory on install,
+  so everything the skill reads/invokes at runtime must live inside `plugins/keystone/` with **zero** outward
+  (`../..`, repo-root) references. `docs/` may link into the bundle; the bundle never links out.
+- **Single source of truth** = the bundle: forms in `plugins/keystone/templates/`, data shapes in
+  `plugins/keystone/schemas/`, the artifact catalog in `plugins/keystone/references/artifact-catalog.md`.
+  Never make a second copy.
+- **Identifier scheme** (`plugins/keystone/references/governance.md`): `FR-`/`NFR-`, `CON-`, `INV-`, `ASM-`,
+  `DEP-`, `OQ-`, `DEC-`, `ADR-`, `RISK-`, `HYP-`, `EXP-`, `AC-`, `PH-`, `WBS-`, `MS-`. Statuses:
+  `Draft → Proposed → Approved / Rejected / Superseded / Deferred → Implemented`. A *proposed* decision is
+  never rendered as *approved*.
+- **New identifier prefixes** must be added to `ID_PATTERNS` in `plugins/keystone/scripts/validate_package.py`
+  or gate **G-IDS** won't recognize them.
+- **Immutable-after-approval** artifacts (ADRs, approved acceptance criteria) are *superseded*, never edited.
+- **Extend additively** via the registries in `plugins/keystone/references/extension.md` (templates, schemas,
+  gates, profiles, diagram kinds, entry points). Additive = MINOR; changing a schema's required fields, the
+  identifier scheme, or the handoff contract = MAJOR + migration note.
 
-### The 22 stages (grouped into 3 movements)
+Note: paths inside `*.template.md` and the strings `init_skill_repo.py` writes describe the **generated**
+package/repo structure (e.g. `skill/`, `docs/assets/`) — those are intentional output content, not stale
+references to this repo's layout.
 
-Understand (1–8: intake → classify → extract → normalize → ambiguity → contradiction → clarify → scope) →
-Explore (9–15: research → architecture → option comparison → hypotheses → POC/experiment → decision capture →
-risk) → Plan & hand off (16–22: execution planning → artifact generation → repo init → quality validation →
-handoff → update cycles → final readiness). The authoritative per-stage spec is `skill/references/workflow.md`.
+## The 5 mechanical quality gates (validator)
 
-## Conventions that must stay consistent
+`plugins/keystone/scripts/validate_package.py` implements the mechanical subset of
+`plugins/keystone/references/quality-gates.md`; all five are Critical:
 
-- **Identifier scheme** (governed by `skill/references/governance.md`): `FR-`/`NFR-` (requirements), `CON-`
-  (constraints), `INV-` (invariants), `ASM-` (assumptions), `DEP-` (dependencies), `OQ-` (open questions),
-  `DEC-` (decisions), `ADR-` (decision records), `RISK-`, `HYP-`, `EXP-`, `AC-`, `PH-`, `WBS-`, `MS-`.
-  Lifecycle statuses: `Draft → Proposed → Approved / Rejected / Superseded / Deferred → Implemented`. A
-  *proposed* decision is never rendered as *approved* — that separation is a core safeguard.
-- **The validator's `ID_PATTERNS`** (`tests/validate_package.py`) keys off these prefixes. If you introduce a
-  new identifier prefix anywhere, add it to `ID_PATTERNS` or G-IDS will not recognize it.
-- **Immutable-after-approval artifacts** (ADRs, approved acceptance criteria) are *superseded*, never edited.
-- **Extend additively, never fork the workflow.** New artifact types, templates, schemas, gates, project-type
-  profiles, diagram kinds, and entry points are added via the registries in `skill/references/extension.md` —
-  register an entry and drop in a file. Additive changes are MINOR; changing an existing schema's required
-  fields, the identifier scheme, or the handoff contract is MAJOR and ships a migration note.
-
-## The 5 mechanical quality gates (what the validator enforces)
-
-`tests/validate_package.py` implements the mechanical subset of `skill/references/quality-gates.md`; all five
-are **Critical**:
-
-- **G-IDS** — identifiers are well-formed, defined once, and every referenced id resolves (no dangling refs).
+- **G-IDS** — identifiers well-formed, defined once, every referenced id resolves (no dangling refs).
 - **G-DEC-STATUS** — every decision/ADR row carries an explicit status from the allowed set.
-- **G-REQ-SRC** — every `FR-`/`NFR-` row has a non-empty source/provenance (a dash or `n/a` counts as empty).
+- **G-REQ-SRC** — every `FR-`/`NFR-` row has a non-empty source/provenance.
 - **G-COMPLETE** — no unfinished markers (`TODO`/`TBD`/`<placeholder>`/`{{…}}`/…) and no empty sections.
 - **G-TRACE** — every MVP requirement in the traceability matrix links to ≥1 decision, ≥1 work item, ≥1 test.
-
-Remaining gates (Warn gates, and the judgment parts of G-CONFLICT/G-EXEC/G-HANDOFF/G-OQ) are recorded by a
-human/agent in the validation report and are intentionally out of scope for the script. A gate reported as
-`SKIP` means no applicable input was found — neither pass nor fail.
 
 When changing the validator, exercise both `tests/fixtures/valid-package/` (must pass, exit 0) and
 `tests/fixtures/invalid-package/` (must fail, exit 1, each seeded defect caught by the right gate).
